@@ -1,5 +1,6 @@
 # Projeto_EngenhariaDeSoftware
 Criação de um dashboard com as seguintes caracteristica
+
 ● Sistema para registro de atividades e notas dos alunos, com acesso para professores
 e responsáveis.
 
