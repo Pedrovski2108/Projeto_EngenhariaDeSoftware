@@ -8,20 +8,13 @@ CREATE TABLE IF NOT EXISTS Usuarios (
   perfil TEXT NOT NULL CHECK(perfil IN ('gestor', 'professor', 'responsavel'))
 );
 
--- -----------------------------------------------------
--- Tabela `Turmas`
--- Define as turmas da escola
--- -----------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS Turmas (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   nome TEXT NOT NULL, -- Ex: "9º Ano B"
   ano_letivo INTEGER NOT NULL -- Ex: 2024
 );
 
--- -----------------------------------------------------
--- Tabela `Alunos`
--- Armazena os dados dos alunos
--- -----------------------------------------------------
 CREATE TABLE IF NOT EXISTS Alunos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   nome_completo TEXT NOT NULL,
