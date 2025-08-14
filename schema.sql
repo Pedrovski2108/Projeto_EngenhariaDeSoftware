@@ -65,15 +65,15 @@ CREATE TABLE IF NOT EXISTS Professor_Turma_Disciplina (
 -- Tabela `Notas`
 -- Armazena as notas dos alunos por disciplina e bimestre/período.
 -- -----------------------------------------------------
-CREATE TABLE IF NOT EXISTS Notas (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  valor REAL NOT NULL,
-  bimestre INTEGER NOT NULL CHECK(bimestre IN (1, 2, 3, 4)),
-  id_aluno INTEGER NOT NULL,
-  id_disciplina INTEGER NOT NULL,
-  data_lancamento TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (id_aluno) REFERENCES Alunos (id),
-  FOREIGN KEY (id_disciplina) REFERENCES Disciplinas (id)
+CREATE TABLE Notas (
+    id_nota INTEGER PRIMARY KEY AUTOINCREMENT,
+    valor REAL NOT NULL,
+    bimestre INTEGER NOT NULL CHECK(bimestre IN (1, 2, 3, 4)),
+    id_aluno INTEGER NOT NULL,
+    id_disciplina INTEGER NOT NULL,
+    data_lancamento TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (id_aluno) REFERENCES Alunos (id_aluno) ON DELETE CASCADE,
+    FOREIGN KEY (id_disciplina) REFERENCES Disciplinas (id_disciplina) ON DELETE CASCADE
 );
 
 -- -----------------------------------------------------
@@ -101,4 +101,13 @@ CREATE TABLE IF NOT EXISTS Avisos (
   data_envio TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   id_gestor INTEGER NOT NULL,
   FOREIGN KEY (id_gestor) REFERENCES Usuarios (id)
+);
+
+CREATE TABLE IF NOT EXISTS atividades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_disciplina INTEGER NOT NULL,
+    titulo TEXT NOT NULL,
+    descricao TEXT,
+    data DATE NOT NULL,
+    FOREIGN KEY (id_disciplina) REFERENCES Disciplinas(id)
 );

@@ -1,219 +1,352 @@
-import streamlit as st
-import sqlite3
-import pandas as pd
+# app.py — MVP Sistema de Gestão Escolar
+# Autor: Pedro / assistência
+# Como executar:  
+# 1) pip install streamlit pandas plotly
+# 2) streamlit run app.py
 import os
-#APP TESTE 
-# --- CONFIGURAÇÃO DO BANCO DE DADOS ---
-DB_FILE = "escola.db"
+import sqlite3
+from contextlib import closing
+from datetime import date, datetime
 
-def get_db_connection():
-    """Cria e retorna uma conexão com o banco de dados."""
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
+import pandas as pd
+import plotly.express as px
+import streamlit as st
 
-def setup_database():
-    """
-    Função completa para criar e popular o banco de dados do zero.
-    Garante a ordem correta de inserção para evitar erros de Foreign Key.
-    """
-    # Deleta o banco antigo, se existir, para garantir um começo limpo
-    if os.path.exists(DB_FILE):
-        os.remove(DB_FILE)
+DB_PATH = "escola.db"
 
-    print("Criando e populando o banco de dados...")
-    conn = get_db_connection()
-    cursor = conn.cursor()
+# -------------------- Utilidades de Banco -------------------- #
 
-    # 1. Cria a estrutura das tabelas a partir do arquivo schema.sql
-    with open('schema.sql', 'r', encoding='utf-8') as f:
-        cursor.executescript(f.read())
+def get_conn():
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
 
-    # 2. Insere os dados de exemplo NA ORDEM CORRETA
-    try:
-        # Inserindo dados que não dependem de outros (Tabelas "Pai")
-        cursor.execute("INSERT INTO Disciplinas (id, nome) VALUES (1, 'Matemática'), (2, 'Português'), (3, 'Ciências');")
-        cursor.execute("INSERT INTO Turmas (id, nome, ano_letivo) VALUES (1, '8º Ano A', 2025), (2, '9º Ano B', 2025);")
-        cursor.execute("""
-            INSERT INTO Usuarios (id, nome, email, senha_hash, perfil) VALUES
-            (1, 'Ana Silva (Gestora)', 'ana.gestora@escola.com', 'hash1', 'gestor'),
-            (2, 'Prof. Carlos Alberto', 'carlos.prof@escola.com', 'hash2', 'professor'),
-            (3, 'Sr. João Pereira', 'joao.pai@email.com', 'hash3', 'responsavel'),
-            (4, 'Sra. Maria Souza', 'maria.mae@email.com', 'hash4', 'responsavel'),
-            (5, 'Prof. Beatriz Lima', 'beatriz.prof@escola.com', 'hash5', 'professor');
-        """)
+def init_db():
+    db_path = os.path.join(os.path.dirname(__file__), "escola.db")
+    schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
 
-        # Agora, inserindo dados que dependem dos registros acima (Tabelas "Filho")
-        # ESTE É O INSERT QUE ESTAVA CAUSANDO O ERRO. AGORA ELE VAI FUNCIONAR.
-        cursor.execute("""
-            INSERT INTO Alunos (id, nome_completo, data_nascimento, id_turma, id_responsavel) VALUES
-            (1, 'Lucas Pereira da Silva', '2011-05-10', 1, 3), -- Turma 1 e Responsável 3 existem
-            (2, 'Mariana Souza Costa', '2011-08-22', 1, 4);   -- Turma 1 e Responsável 4 existem
-        """)
-        
-        # Inserindo as associações de professores
-        cursor.execute("""
-            INSERT INTO Professor_Turma_Disciplina (id_professor, id_turma, id_disciplina) VALUES
-            (2, 1, 1), -- Prof. Carlos (ID 2) -> Turma 8º Ano A (ID 1) -> Matemática (ID 1)
-            (5, 1, 3); -- Prof. Beatriz (ID 5) -> Turma 8º Ano A (ID 1) -> Ciências (ID 3)
-        """)
+    with sqlite3.connect(db_path) as conn:
+        with open(schema_path, encoding="utf-8") as f:
+            schema_sql = f.read()
+        conn.executescript(schema_sql)
+    print("Banco de dados inicializado com sucesso!")
 
-        # Inserindo uma nota de exemplo
-        cursor.execute("INSERT INTO Notas (valor, bimestre, id_aluno, id_disciplina) VALUES (8.5, 1, 1, 1);")
+@st.cache_data(show_spinner=False)
+def get_df(sql: str, params: tuple | list = ()):  # leitura com cache
+    with closing(get_conn()) as conn:
+        return pd.read_sql(sql, conn, params=params)
 
+
+def execute(sql: str, params: tuple | list = ()):  # escrita sem cache
+    with closing(get_conn()) as conn:
+        cur = conn.cursor()
+        cur.execute(sql, params)
         conn.commit()
-        print("Banco de dados criado e populado com sucesso!")
+        return cur.lastrowid
 
-    except sqlite3.Error as e:
-        print(f"Ocorreu um erro ao inserir os dados: {e}")
-        conn.rollback() # Desfaz as alterações em caso de erro
-    finally:
-        conn.close()
-# --- FUNÇÕES DE CONSULTA AO BANCO ---
 
-def get_professor_turmas(id_professor):
-    """Busca as turmas que um professor leciona."""
-    conn = get_db_connection()
-    query = """
-        SELECT DISTINCT T.id, T.nome
-        FROM Turmas T
-        JOIN Professor_Turma_Disciplina PTD ON T.id = PTD.id_turma
-        WHERE PTD.id_professor = ?
-    """
-    turmas = pd.read_sql_query(query, conn, params=(id_professor,))
-    conn.close()
-    return turmas
+# -------------------- UI Base -------------------- #
 
-def get_professor_disciplinas(id_professor, id_turma):
-    """Busca as disciplinas que um professor leciona em uma turma específica."""
-    conn = get_db_connection()
-    query = """
-        SELECT DISTINCT D.id, D.nome
-        FROM Disciplinas D
-        JOIN Professor_Turma_Disciplina PTD ON D.id = PTD.id_disciplina
-        WHERE PTD.id_professor = ? AND PTD.id_turma = ?
-    """
-    disciplinas = pd.read_sql_query(query, conn, params=(id_professor, id_turma))
-    conn.close()
-    return disciplinas
+st.set_page_config(page_title="Gestão Escolar — MVP", layout="wide")
+st.title("📚 Sistema de Gestão Escolar — MVP")
 
-def get_alunos_e_notas(id_turma, id_disciplina, bimestre):
-    """Busca alunos de uma turma e suas notas na disciplina e bimestre selecionados."""
-    conn = get_db_connection()
-    query = """
-        SELECT
-            A.id AS id_aluno,
-            A.nome_completo,
-            N.valor AS nota
-        FROM Alunos A
-        LEFT JOIN Notas N ON A.id = N.id_aluno
-                          AND N.id_disciplina = ?
-                          AND N.bimestre = ?
-        WHERE A.id_turma = ?
-    """
-    df = pd.read_sql_query(query, conn, params=(id_disciplina, bimestre, id_turma))
-    conn.close()
-    return df
+# Tenta criar tabelas mínimas se ainda não existirem
+init_db()
 
-def salvar_notas(df_notas):
-    """Atualiza ou insere as notas no banco de dados."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    for index, row in df_notas.iterrows():
-        # Verifica se a nota não é nula (o usuário pode ter apagado)
-        if pd.notna(row['nota']):
-            # Tenta atualizar uma nota existente
-            cursor.execute("""
-                UPDATE Notas SET valor = ?
-                WHERE id_aluno = ? AND id_disciplina = ? AND bimestre = ?
-            """, (row['nota'], row['id_aluno'], row['id_disciplina'], row['bimestre']))
+with st.sidebar:
+    st.header("🔐 Perfil de acesso (simples)")
+    perfil = st.radio(
+        "Escolha seu perfil",
+        options=["Gestor", "Professor", "Responsável"],
+        index=1,
+    )
+    st.divider()
+    st.caption("Banco de dados: ")
+    st.code(DB_PATH)
 
-            # Se nenhuma linha foi atualizada, insere uma nova nota
-            if cursor.rowcount == 0:
-                cursor.execute("""
-                    INSERT INTO Notas (id_aluno, id_disciplina, bimestre, valor)
-                    VALUES (?, ?, ?, ?)
-                """, (row['id_aluno'], row['id_disciplina'], row['bimestre'], row['nota']))
-        else:
-            # Se a nota for nula/vazia, remove o registro do banco
-            cursor.execute("""
-                DELETE FROM Notas
-                WHERE id_aluno = ? AND id_disciplina = ? AND bimestre = ?
-            """, (row['id_aluno'], row['id_disciplina'], row['bimestre']))
+abas = st.tabs([
+    "🏠 Dashboard",
+    "📝 Notas & Atividades",
+    "✅ Frequência",
+    "📣 Comunicação",
+    "⚙️ Cadastros básicos",
+])
 
-    conn.commit()
-    conn.close()
+# -------------------- Dashboard -------------------- #
+with abas[0]:
+    colA, colB, colC, colD = st.columns(4)
+    total_alunos = get_df("SELECT COUNT(*) c FROM alunos")["c"].iat[0]
+    total_turmas = get_df("SELECT COUNT(*) c FROM turmas")["c"].iat[0]
+    total_disciplinas = get_df("SELECT COUNT(*) c FROM disciplinas")["c"].iat[0]
+    total_avisos = get_df("SELECT COUNT(*) c FROM avisos")["c"].iat[0]
 
-# --- INTERFACE DA APLICAÇÃO STREAMLIT ---
+    colA.metric("Alunos", total_alunos)
+    colB.metric("Turmas", total_turmas)
+    colC.metric("Disciplinas", total_disciplinas)
+    colD.metric("Avisos", total_avisos)
 
-# Inicializa o banco de dados na primeira execução
-setup_database()
+    st.subheader("Rendimento — distribuição de notas")
+    df_notas = get_df(
+        """
+        SELECT n.id, a.nome AS aluno, d.nome AS disciplina, atv.titulo AS atividade, n.nota, n.data_registro
+        FROM notas n
+        JOIN alunos a ON a.id=n.aluno_id
+        JOIN atividades atv ON atv.id=n.atividade_id
+        JOIN disciplinas d ON d.id=atv.disciplina_id
+        ORDER BY n.data_registro DESC
+        """
+    )
 
-st.set_page_config(layout="wide")
-st.title(" Lançamento de Notas")
-st.markdown("### Área do Professor")
-
-# Simulação de Login: Em um sistema real, isso viria de um sistema de autenticação
-# ID 2 = Prof. Carlos
-ID_PROFESSOR_LOGADO = 2
-st.info(f"Professor logado: **Prof. Carlos** (ID: {ID_PROFESSOR_LOGADO})")
-
-# 1. Seleção de Turma
-turmas = get_professor_turmas(ID_PROFESSOR_LOGADO)
-if turmas.empty:
-    st.warning("Você não está associado a nenhuma turma.")
-else:
-    # Usamos o nome da turma para exibição e o id como valor
-    turma_selecionada_nome = st.selectbox("Selecione a Turma", options=turmas['nome'])
-    id_turma_selecionada = turmas.loc[turmas['nome'] == turma_selecionada_nome, 'id'].iloc[0]
-
-    # 2. Seleção de Disciplina (dependente da turma)
-    disciplinas = get_professor_disciplinas(ID_PROFESSOR_LOGADO, id_turma_selecionada)
-    if disciplinas.empty:
-        st.warning("Nenhuma disciplina encontrada para esta turma.")
+    if df_notas.empty:
+        st.info("Sem notas registradas ainda. Cadastre na aba **Notas & Atividades**.")
     else:
-        disciplina_selecionada_nome = st.selectbox("Selecione a Disciplina", options=disciplinas['nome'])
-        id_disciplina_selecionada = disciplinas.loc[disciplinas['nome'] == disciplina_selecionada_nome, 'id'].iloc[0]
+        c1, c2 = st.columns(2)
+        with c1:
+            fig_hist = px.histogram(df_notas, x="nota", nbins=20, title="Distribuição de notas (0–10)")
+            st.plotly_chart(fig_hist, use_container_width=True)
+        with c2:
+            fig_box = px.box(
+                df_notas,
+                x="disciplina",
+                y="nota",
+                points="all",
+                title="Notas por disciplina",
+            )
+            st.plotly_chart(fig_box, use_container_width=True)
 
-        # 3. Seleção do Bimestre
-        bimestre_selecionado = st.selectbox("Selecione o Bimestre", options=[1, 2, 3, 4])
+    st.subheader("Frequência — presença por turma (últimos 30 dias)")
+    df_freq = get_df(
+        """
+        SELECT t.nome turma,
+               AVG(CASE WHEN f.status='Presente' THEN 1.0 WHEN f.status='Justificado' THEN 0.8 ELSE 0 END) AS indice_presenca
+        FROM frequencias f
+        JOIN alunos a ON a.id=f.aluno_id
+        LEFT JOIN turmas t ON t.id=a.turma_id
+        WHERE date(f.data) >= date('now','-30 day')
+        GROUP BY t.nome
+        ORDER BY indice_presenca DESC
+        """
+    )
+    if df_freq.empty:
+        st.info("Sem presenças registradas nos últimos 30 dias. Use a aba **Frequência**.")
+    else:
+        st.bar_chart(df_freq.set_index("turma"))
 
-        st.divider()
+# -------------------- Notas & Atividades -------------------- #
+with abas[1]:
+    st.subheader("Cadastrar atividade")
+    df_disc = get_df("SELECT id, nome FROM disciplinas ORDER BY nome")
+    if df_disc.empty:
+        st.warning("Cadastre ao menos uma **Disciplina** em *Cadastros básicos*.")
+    col1, col2 = st.columns(2)
+    with col1:
+        disc_escolhida = st.selectbox("Disciplina", options=df_disc["nome"].tolist()) if not df_disc.empty else None
+        titulo = st.text_input("Título da atividade")
+    with col2:
+        data_atividade = st.date_input("Data", value=date.today())
+        descricao = st.text_area("Descrição (opcional)", height=80)
 
-        # 4. Tabela de Alunos e Notas
-        st.markdown(f"#### Lançando notas para **{disciplina_selecionada_nome}** - Turma **{turma_selecionada_nome}** - **{bimestre_selecionado}º Bimestre**")
-        
-        # Busca os dados atuais
-        df_alunos_notas = get_alunos_e_notas(id_turma_selecionada, id_disciplina_selecionada, bimestre_selecionado)
+    if st.button("Salvar atividade", type="primary", disabled=df_disc.empty or not titulo):
+        if df_disc.empty:
+            st.error("Cadastre uma disciplina primeiro.")
+        else:
+            disc_id = int(df_disc[df_disc.nome == disc_escolhida].id.iat[0])
+            execute(
+                "INSERT INTO atividades (disciplina_id, titulo, descricao, data) VALUES (?,?,?,?)",
+                (disc_id, titulo.strip(), descricao.strip(), data_atividade.isoformat()),
+            )
+            st.success("Atividade cadastrada!")
+            st.cache_data.clear()
 
-        # Usamos o st.data_editor para criar uma tabela editável
-        edited_df = st.data_editor(
-            df_alunos_notas,
-            column_config={
-                "id_aluno": None, # Oculta a coluna de ID do aluno
-                "nome_completo": st.column_config.TextColumn("Aluno", disabled=True), # Coluna de texto não editável
-                "nota": st.column_config.NumberColumn(
-                    "Nota (de 0 a 10)",
-                    min_value=0.0,
-                    max_value=10.0,
-                    step=0.5,
-                    format="%.1f",
-                )
-            },
-            hide_index=True,
-            num_rows="dynamic" # Permite adicionar/remover linhas (não usaremos para salvar)
-        )
+    st.divider()
+    st.subheader("Lançar nota")
+    df_alunos = get_df("SELECT id, nome FROM alunos ORDER BY nome")
+    df_atv = get_df(
+        "SELECT a.id, a.titulo || ' — ' || d.nome || ' (' || a.data || ')' AS rotulo FROM atividades a JOIN disciplinas d ON d.id=a.disciplina_id ORDER BY a.data DESC"
+    )
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c1:
+        aluno_sel = st.selectbox("Aluno", options=df_alunos["nome"].tolist() if not df_alunos.empty else [])
+    with c2:
+        atv_sel = st.selectbox("Atividade", options=df_atv["rotulo"].tolist() if not df_atv.empty else [])
+    with c3:
+        nota = st.number_input("Nota (0–10)", 0.0, 10.0, step=0.5)
 
-        # 5. Botão para Salvar
-        if st.button("Salvar Notas", type="primary"):
-            # Adiciona colunas auxiliares necessárias para a função de salvar
-            edited_df['id_disciplina'] = id_disciplina_selecionada
-            edited_df['bimestre'] = bimestre_selecionado
+    if st.button("Registrar nota", disabled=df_alunos.empty or df_atv.empty):
+        try:
+            aluno_id = int(df_alunos[df_alunos.nome == aluno_sel].id.iat[0])
+            atv_id = int(df_atv[df_atv.rotulo == atv_sel].id.iat[0])
+            execute("INSERT OR REPLACE INTO notas (aluno_id, atividade_id, nota) VALUES (?,?,?)", (aluno_id, atv_id, float(nota)))
             
+            st.success("Nota registrada!")
+            st.cache_data.clear()
+        except Exception as e:
+            st.error(f"Erro ao registrar nota: {e}")
+
+    st.divider()
+    st.subheader("Notas lançadas")
+    st.caption("Filtre por turma, disciplina ou aluno")
+
+    colf1, colf2, colf3 = st.columns(3)
+    turmas = get_df("SELECT id, nome FROM turmas ORDER BY nome")
+    turma_f = colf1.selectbox("Turma", ["Todas"] + turmas.nome.tolist())
+    disc_f = colf2.selectbox("Disciplina", ["Todas"] + df_disc.nome.tolist())
+    aluno_f = colf3.text_input("Aluno (contém)")
+
+    base_sql = (
+        "SELECT n.id, a.nome AS Aluno, t.nome AS Turma, d.nome AS Disciplina, atv.titulo AS Atividade, n.nota AS Nota, atv.data AS Data "
+        "FROM notas n JOIN alunos a ON a.id=n.aluno_id "
+        "LEFT JOIN turmas t ON t.id=a.turma_id "
+        "JOIN atividades atv ON atv.id=n.atividade_id "
+        "JOIN disciplinas d ON d.id=atv.disciplina_id WHERE 1=1"
+    )
+
+    params = []
+    if turma_f != "Todas":
+        base_sql += " AND t.nome=?"
+        params.append(turma_f)
+    if disc_f != "Todas":
+        base_sql += " AND d.nome=?"
+        params.append(disc_f)
+    if aluno_f.strip():
+        base_sql += " AND a.nome LIKE ?"
+        params.append(f"%{aluno_f.strip()}%")
+
+    base_sql += " ORDER BY atv.data DESC, a.nome"
+    df_view = get_df(base_sql, params)
+    st.dataframe(df_view, use_container_width=True)
+
+# -------------------- Frequência -------------------- #
+with abas[2]:
+    st.subheader("Registro de frequência (por aluno)")
+    df_alunos2 = get_df("SELECT id, nome FROM alunos ORDER BY nome")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        aluno_sel2 = st.selectbox("Aluno", options=df_alunos2.nome.tolist() if not df_alunos2.empty else [])
+    with c2:
+        data_freq = st.date_input("Data", value=date.today())
+    with c3:
+        status = st.radio("Status", ["Presente", "Ausente", "Justificado"], horizontal=True)
+
+    if st.button("Salvar presença", disabled=df_alunos2.empty):
+        try:
+            aluno_id2 = int(df_alunos2[df_alunos2.nome == aluno_sel2].id.iat[0])
+            execute(
+                "INSERT OR REPLACE INTO frequencias (aluno_id, data, status) VALUES (?,?,?)",
+                (aluno_id2, data_freq.isoformat(), status),
+            )
+            st.success("Presença salva!")
+            st.cache_data.clear()
+        except Exception as e:
+            st.error(f"Erro: {e}")
+
+    st.divider()
+    st.subheader("Resumo da turma (últimos 15 dias)")
+    turmas2 = get_df("SELECT id, nome FROM turmas ORDER BY nome")
+    turma_escolhida = st.selectbox("Turma", options=turmas2.nome.tolist() if not turmas2.empty else [])
+
+    if turma_escolhida:
+        df_turma = get_df(
+            """
+            SELECT a.nome AS Aluno, f.data AS Data, f.status AS Status
+            FROM alunos a
+            JOIN frequencias f ON f.aluno_id=a.id
+            JOIN turmas t ON t.id=a.turma_id
+            WHERE t.nome=? AND date(f.data) >= date('now','-15 day')
+            ORDER BY f.data DESC, a.nome
+            """,
+            (turma_escolhida,),
+        )
+        if df_turma.empty:
+            st.info("Sem registros para o período.")
+        else:
+            st.dataframe(df_turma, use_container_width=True)
+
+# -------------------- Comunicação -------------------- #
+with abas[3]:
+    st.subheader("Publicar aviso")
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        titulo_av = st.text_input("Título")
+        msg_av = st.text_area("Mensagem", height=120)
+    with c2:
+        publico = st.selectbox("Público", ["Todos", "Responsáveis", "Professores", "Gestores"])
+        st.caption("Data de criação automática")
+
+    if st.button("Enviar aviso", type="primary", disabled=not (titulo_av and msg_av)):
+        execute(
+            "INSERT INTO avisos (titulo, mensagem, publico) VALUES (?,?,?)",
+            (titulo_av.strip(), msg_av.strip(), publico),
+        )
+        st.success("Aviso publicado!")
+        st.cache_data.clear()
+
+    st.divider()
+    st.subheader("Avisos recentes")
+    filtro_pub = st.multiselect("Filtrar por público", ["Todos", "Responsáveis", "Professores", "Gestores"], default=["Todos"])
+    sql_avisos = "SELECT data_criacao AS Data, publico AS Público, titulo AS Título, mensagem AS Mensagem FROM avisos WHERE 1=1"
+    params = []
+    if filtro_pub:
+        sql_avisos += " AND publico IN (" + ",".join(["?"] * len(filtro_pub)) + ")"
+        params.extend(filtro_pub)
+    sql_avisos += " ORDER BY data_criacao DESC LIMIT 100"
+    df_av = get_df(sql_avisos, params)
+    st.dataframe(df_av, use_container_width=True)
+
+# -------------------- Cadastros -------------------- #
+with abas[4]:
+    st.subheader("Cadastros básicos (mínimo viável)")
+    tab1, tab2, tab3 = st.tabs(["Alunos", "Turmas", "Disciplinas"])
+
+    with tab1:
+        colA, colB = st.columns([2, 1])
+        with colA:
+            nome_aluno = st.text_input("Nome do aluno")
+            lista_turmas = get_df("SELECT id, nome FROM turmas ORDER BY nome")
+            turma_aluno = st.selectbox("Turma", options=lista_turmas.nome.tolist() if not lista_turmas.empty else [])
+            responsavel = st.text_input("Responsável (nome)")
+        with colB:
+            st.caption("Campos obrigatórios: Nome")
+        if st.button("Adicionar aluno", disabled=not nome_aluno):
+            turma_id = (
+                int(lista_turmas[lista_turmas.nome == turma_aluno].id.iat[0]) if not lista_turmas.empty and turma_aluno else None
+            )
+            execute(
+                "INSERT INTO alunos (nome, turma_id, responsavel) VALUES (?,?,?)",
+                (nome_aluno.strip(), turma_id, responsavel.strip() if responsavel else None),
+            )
+            st.success("Aluno cadastrado!")
+            st.cache_data.clear()
+
+        st.markdown("**Alunos cadastrados**")
+        df_al = get_df(
+            "SELECT a.id, a.nome, t.nome AS turma, a.responsavel FROM alunos a LEFT JOIN turmas t ON t.id=a.turma_id ORDER BY a.nome"
+        )
+        st.dataframe(df_al, use_container_width=True)
+
+    with tab2:
+        nome_turma = st.text_input("Nome da turma (ex.: 1ºA)")
+        if st.button("Adicionar turma", disabled=not nome_turma):
             try:
-                salvar_notas(edited_df)
-                st.success("Notas salvas com sucesso!")
-                # Opcional: Recarregar a página ou os dados para confirmar a alteração
-                st.rerun()
-            except Exception as e:
-                st.error(f"Ocorreu um erro ao salvar as notas: {e}")
+                execute("INSERT INTO turmas (nome) VALUES (?)", (nome_turma.strip(),))
+                st.success("Turma adicionada!")
+                st.cache_data.clear()
+            except sqlite3.IntegrityError:
+                st.error("Turma já existe.")
+        st.markdown("**Turmas**")
+        st.dataframe(get_df("SELECT * FROM turmas ORDER BY nome"), use_container_width=True)
+
+    with tab3:
+        nome_disc = st.text_input("Nome da disciplina")
+        if st.button("Adicionar disciplina", disabled=not nome_disc):
+            try:
+                execute("INSERT INTO disciplinas (nome) VALUES (?)", (nome_disc.strip(),))
+                st.success("Disciplina adicionada!")
+                st.cache_data.clear()
+            except sqlite3.IntegrityError:
+                st.error("Disciplina já existe.")
+        st.markdown("**Disciplinas**")
+        st.dataframe(get_df("SELECT * FROM disciplinas ORDER BY nome"), use_container_width=True)
+
+# -------------------- Rodapé -------------------- #
+st.caption(
+    "MVP com foco em: cadastro básico, lançamento de notas, registro de frequência, comunicação e dashboard simples."
+)
