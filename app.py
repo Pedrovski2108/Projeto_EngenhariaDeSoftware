@@ -1,5 +1,3 @@
-# app.py — MVP Sistema de Gestão Escolar
-# AUTOR: Pedro / Gemini (Versão Corrigida)
 import os
 import sqlite3
 from contextlib import closing
